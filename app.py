@@ -11,13 +11,15 @@ import os
 import xml.etree.ElementTree as ET 
 import subprocess
 from bson import ObjectId
+import json
+from datetime import datetime
+import traceback
+import sys
 port = 4800
 app = Flask(__name__)
 CORS(app)
 mongo_url = "mongodb://localhost:27017"
-PROJECTS_DIR = "projects"
-if not os.path.exists(PROJECTS_DIR):
-    os.makedirs(PROJECTS_DIR)
+
 
 client = MongoClient(mongo_url, serverSelectionTimeoutMS=5000)
 db_name = client['codeEditor']
@@ -579,7 +581,7 @@ def update_file_code():
                     "filePath": filePath
                 }), 200
         else:
-            return jsonify({"error": "Failed to update the file code."}), 500
+            return jsonify({"error": "Code is already up-to-date."}), 500
 
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
@@ -968,68 +970,36 @@ def update_internship():
     return jsonify({"status": True, "internships": internshipData}), 200
 
 
-@app.route('/execute', methods=['POST'])
-def execute_code():
-    data = request.get_json()
-    print("data",data)
-    code = data.get('codeFromEditor', '')
-    print("code",code)
+# @app.route('/execute', methods=['POST'])
+# def execute_code():
+#     data = request.get_json()
+#     print("data",data)
+#     code = data.get('codeFromEditor', '')
+#     print("code",code)
 
-    with open('temp_code.py', 'w') as file:
-        file.write(code)
+#     with open('temp_code.py', 'w') as file:
+#         file.write(code)
 
-    try:
-        result = subprocess.run(['python', 'temp_code.py'], capture_output=True, text=True, check=True)
-        output = result.stdout
-        print(output,"output")
-    except subprocess.CalledProcessError as e:
-        output = e.stderr  
+#     try:
+#         result = subprocess.run(['python', 'temp_code.py'], capture_output=True, text=True, check=True)
+#         output = result.stdout
+#         print(output,"output")
+#     except subprocess.CalledProcessError as e:
+#         output = e.stderr  
 
-    return jsonify({'result': output})
+#     return jsonify({'result': output})
 
 
-from flask import Flask, request, jsonify
-from flask_cors import CORS
-import os
-import subprocess
-import json
-from datetime import datetime
-import traceback
-import sys
 
-app = Flask(__name__)
-CORS(app)
 
-# Configuration
-PROJECTS_DIR = "code_projects"
-OUTPUT_DIR = "code_outputs"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECTS_DIR = os.path.join(BASE_DIR, 'projects')
 
-# Create necessary directories
-for directory in [PROJECTS_DIR, OUTPUT_DIR]:
-    if not os.path.exists(directory):
-        os.makedirs(directory)
-
-def create_project_directories(project_id):
-    """Create project directories if they don't exist"""
+def create_project_directory(project_id):
+    """Create a project directory if it doesn't exist."""
     project_dir = os.path.join(PROJECTS_DIR, project_id)
-    output_dir = os.path.join(OUTPUT_DIR, project_id)
-    
-    for directory in [project_dir, output_dir]:
-        if not os.path.exists(directory):
-            os.makedirs(directory)
-    
-    return project_dir, output_dir
-
-def save_output(project_id, output_data):
-    """Save execution output to a file"""
-    _, output_dir = create_project_directories(project_id)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_file = os.path.join(output_dir, f"output_{timestamp}.json")
-    
-    with open(output_file, 'w') as f:
-        json.dump(output_data, f, indent=2)
-    
-    return output_file
+    os.makedirs(project_dir, exist_ok=True)
+    return project_dir
 
 @app.route('/execute-code', methods=['POST'])
 def execute_code():
@@ -1040,66 +1010,96 @@ def execute_code():
 
         project_id = data.get('projectId')
         code = data.get('code')
-        print("project id ",project_id)
-        print("code id ",code)
+        port = data.get('port')
         if not all([project_id, code]):
             return jsonify({'error': 'Missing required fields'}), 400
 
-        # Create project directories
-        project_dir, _ = create_project_directories(project_id)
+        project_dir = create_project_directory(project_id)
+        code_file_path = os.path.join(project_dir, "App.py")
+        output_log_path = os.path.join(project_dir, "process_output.log")
+        error_log_path = os.path.join(project_dir, "process_error.log")
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        file_name = f"code_{timestamp}.py"
-        file_path = os.path.join(project_dir, file_name)
-
-        with open(file_path, 'w', encoding='utf-8') as f:
+        with open(code_file_path, 'w', encoding='utf-8') as f:
             f.write(code)
+        print("Codepath is", code_file_path)
 
+        python_executable = sys.executable
+        print("Python executable:", python_executable)
+        if not os.path.exists(python_executable):
+            raise FileNotFoundError(f"Python executable not found: {python_executable}")
+
+        if not os.path.exists(code_file_path):
+            raise FileNotFoundError(f"Code file not found: {code_file_path}")
+
+        pm2_app_name = f"python-script-{project_id}"
+
+        # Check if the application is already running
         try:
-            result = subprocess.run(
-                [sys.executable, file_path],
+            list_processes = subprocess.run(
+                ["C:\\Program Files\\nodejs\\npx.cmd", "pm2", "list", "--silent"],
                 capture_output=True,
                 text=True,
-                timeout=30
+                env={**os.environ, "PATH": os.environ["PATH"] + ";C:\\Program Files\\nodejs\\"},
             )
 
-            output_data = {
-                'timestamp': timestamp,
-                'stdout': result.stdout,
-                'stderr': result.stderr,
-                'returncode': result.returncode,
-                'file_name': file_name
-            }
+            if pm2_app_name in list_processes.stdout:
+                print(f"Restarting PM2 application: {pm2_app_name}")
+                restart_process = subprocess.run(
+                    ["C:\\Program Files\\nodejs\\npx.cmd", "pm2", "restart", pm2_app_name],
+                    capture_output=True,
+                    text=True,
+                    env={**os.environ, "PATH": os.environ["PATH"] + ";C:\\Program Files\\nodejs\\"},
+                )
+                return jsonify({
+                    'message': 'Code execution restarted successfully',
+                    'pm2_app_name': pm2_app_name,
+                    'stdout': restart_process.stdout,
+                    'stderr': restart_process.stderr
+                })
+            else:
+                print(f"Starting new PM2 application: {pm2_app_name}")
+                start_process = subprocess.run(
+                    [
+                        "C:\\Program Files\\nodejs\\npx.cmd",
+                        "pm2",
+                        "start",
+                        python_executable,
+                        "--name",
+                        pm2_app_name,
+                        "--output",
+                        output_log_path,
+                        "--error",
+                        error_log_path,
+                        "--",
+                        code_file_path,
+                    ],
+                    capture_output=True,
+                    text=True,
+                    env={**os.environ, "PATH": os.environ["PATH"] + ";C:\\Program Files\\nodejs\\"},
+                )
+                print("start_Process", start_process)
+                return jsonify({
+                    'message': 'Code execution started successfully',
+                    'pm2_app_name': pm2_app_name,
+                    'stdout': start_process.stdout,
+                    'stderr': start_process.stderr
+                })
 
-            output_file = save_output(project_id, output_data)
-
-            history = get_execution_history(project_id)
-
+        except subprocess.CalledProcessError as e:
             return jsonify({
-                'current_output': output_data,
-                'execution_history': history,
-                'file_path': file_path
-            })
-
-        except subprocess.TimeoutExpired:
-            error_data = {
-                'timestamp': timestamp,
-                'error': 'Execution timeout',
-                'stderr': 'Code execution exceeded 30 second timeout limit',
-                'file_name': file_name
-            }
-            save_output(project_id, error_data)
-            return jsonify(error_data), 408
+                'error': 'Failed to start or restart process with npx pm2',
+                'stderr': e.stderr,
+                'stdout': e.stdout
+            }), 500
 
     except Exception as e:
         error_data = {
-            'timestamp': datetime.now().strftime("%Y%m%d_%H%M%S"),
+            'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             'error': str(e),
             'traceback': traceback.format_exc()
         }
-        if project_id:
-            save_output(project_id, error_data)
         return jsonify(error_data), 500
+
 
 def get_execution_history(project_id):
     output_dir = os.path.join(OUTPUT_DIR, project_id)
